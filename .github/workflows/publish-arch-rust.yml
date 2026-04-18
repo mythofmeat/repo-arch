@@ -12,8 +12,23 @@ on:
     secrets:
       REPO_ARCH_TOKEN:
         required: true
+env:
+  REPO_NAME: repo-arch
+  REPO_OWNER: mythofmeat
+  CARGO_TARGET_DIR_HOST: /home/builder/cargo-target
+  CARGO_HOME_HOST: /home/builder/.cargo
 jobs:
   package:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      PACMAN_KEY: pacman-${{ hashFiles('.github/workflows/package.yml') }}
+      CARGO_REGISTRY_KEY: cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      CARGO_TARGET_KEY: cargo-target-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
     steps:
-      - run: echo "hi from publish-arch-rust"
+      - run: |
+          echo "pkgbuild_dir: ${{ inputs.pkgbuild_dir }}"
+          echo "extra: ${{ inputs.extra_pacman_packages }}"
+          echo "pacman_key: ${{ env.PACMAN_KEY }}"
+          echo "cargo_target_dir_host: ${{ env.CARGO_TARGET_DIR_HOST }}"
