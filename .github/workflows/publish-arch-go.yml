@@ -98,14 +98,19 @@ jobs:
         working-directory: ${{ inputs.pkgbuild_dir }}
         run: sudo -u builder makepkg -sf --noconfirm --nocheck
 
+      # Save key drops hashFiles because the workspace is now chowned to
+      # `builder`, and the runner-side hashFiles eval can fail to read
+      # files it found. continue-on-error so any cache-save failure never
+      # blocks the actual publish steps below.
       - name: Save go module + build cache
         if: always()
+        continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: |
             /home/builder/go/pkg/mod
             /home/builder/.cache/go-build
-          key: go-cache-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
+          key: go-cache-${{ github.sha }}
 
       - name: Save pacman package cache
         if: always()
