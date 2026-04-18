@@ -20,5 +20,7 @@ env:
 jobs:
   package:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - run: echo "${{ env.CARGO_TARGET_DIR_HOST }}"
+      - run: echo ok
