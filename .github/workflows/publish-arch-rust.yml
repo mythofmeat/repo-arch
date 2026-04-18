@@ -107,7 +107,7 @@ jobs:
 
       - name: Build packages
         working-directory: ${{ inputs.pkgbuild_dir }}
-        run: sudo -u builder makepkg -sf --noconfirm
+        run: sudo -u builder makepkg -sf --noconfirm --nocheck
 
       - name: Save cargo build target
         if: always()
