@@ -1,26 +1,181 @@
-name: Publish Arch package Rust
+name: Publish Arch package (Rust)
+
+# Reusable workflow that builds a Rust project's PKGBUILD inside an
+# archlinux:latest container, merges the resulting packages into
+# mythofmeat/repo-arch's rolling `latest` release, and creates a matching
+# tag release on the caller's own repo with git-cliff release notes.
+#
+# Caller usage:
+#
+#   jobs:
+#     publish:
+#       permissions:
+#         contents: write    # REQUIRED — caller must grant at job level
+#       uses: mythofmeat/repo-arch/.github/workflows/publish-arch-rust.yml@main
+#       with:
+#         pkgbuild_dir: contrib
+#         extra_pacman_packages: "alsa-lib protobuf"
+#       secrets: inherit
+
 on:
   workflow_call:
     inputs:
       pkgbuild_dir:
+        description: "Directory containing the PKGBUILD (e.g. 'contrib', 'contrib/arch')"
         required: true
         type: string
       extra_pacman_packages:
+        description: "Space-separated pacman packages to install beyond the base set"
         required: false
         type: string
         default: ""
     secrets:
       REPO_ARCH_TOKEN:
+        description: "PAT with Contents: Read+Write on mythofmeat/repo-arch"
         required: true
+
 env:
   REPO_NAME: repo-arch
   REPO_OWNER: mythofmeat
   CARGO_TARGET_DIR_HOST: /home/builder/cargo-target
   CARGO_HOME_HOST: /home/builder/.cargo
+
 jobs:
   package:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    container:
+      image: archlinux:latest
+    env:
+      PACMAN_KEY: pacman-${{ hashFiles('.github/workflows/package.yml') }}
+      CARGO_REGISTRY_KEY: cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      CARGO_TARGET_KEY: cargo-target-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
     steps:
-      - run: echo ok
+      - name: Restore pacman package cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /var/cache/pacman/pkg
+          key: ${{ env.PACMAN_KEY }}
+          restore-keys: pacman-
+
+      - name: Install system dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel clang mold git git-cliff jq nodejs github-cli sudo rustup openssl \
+            ${{ inputs.extra_pacman_packages }}
+          rustup default stable
+          useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore cargo registry and git db
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /home/builder/.cargo/registry
+            /home/builder/.cargo/git
+          key: ${{ env.CARGO_REGISTRY_KEY }}
+          restore-keys: cargo-registry-
+
+      - name: Restore cargo build target
+        uses: actions/cache/restore@v4
+        with:
+          path: /home/builder/cargo-target
+          key: ${{ env.CARGO_TARGET_KEY }}
+          restore-keys: |
+            cargo-target-${{ hashFiles('**/Cargo.lock') }}-
+            cargo-target-
+
+      - name: Mark workspace as git-safe
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Verify tag is on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor HEAD origin/main || \
+            { echo "::error::Tag is not on main — skipping build"; exit 1; }
+
+      - name: Pin PKGBUILD to tag and local checkout
+        working-directory: ${{ inputs.pkgbuild_dir }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          VER="${TAG#v}"
+          sed -i "s|^pkgver=.*|pkgver=${VER}|" PKGBUILD
+          sed -i -E "s|^source=\(\"([^:]+)::git\+[^\"]*\"(.*)\)$|source=(\"\1::git+file://${GITHUB_WORKSPACE}#tag=${TAG}\"\2)|" PKGBUILD
+          sed -i "s|export CARGO_TARGET_DIR=target|ln -sfn ${CARGO_TARGET_DIR_HOST} target|" PKGBUILD
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          mkdir -p "${CARGO_TARGET_DIR_HOST}" "${CARGO_HOME_HOST}"
+          chown -R builder:builder /home/builder
+
+      - name: Build packages
+        working-directory: ${{ inputs.pkgbuild_dir }}
+        run: sudo -u builder makepkg -sf --noconfirm
+
+      - name: Save cargo build target
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: /home/builder/cargo-target
+          key: ${{ env.CARGO_TARGET_KEY }}
+
+      - name: Save cargo registry and git db
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /home/builder/.cargo/registry
+            /home/builder/.cargo/git
+          key: ${{ env.CARGO_REGISTRY_KEY }}
+
+      - name: Save pacman package cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: /var/cache/pacman/pkg
+          key: ${{ env.PACMAN_KEY }}
+
+      - name: Fetch existing repo database
+        working-directory: ${{ inputs.pkgbuild_dir }}
+        env:
+          GH_TOKEN: ${{ secrets.REPO_ARCH_TOKEN }}
+        run: |
+          gh release download latest \
+            -R "${REPO_OWNER}/${REPO_NAME}" \
+            -p "${REPO_NAME}.db.tar.zst" \
+            -p "${REPO_NAME}.files.tar.zst" \
+            2>/dev/null || echo "No existing db; starting fresh."
+
+      - name: Merge into repo database
+        working-directory: ${{ inputs.pkgbuild_dir }}
+        run: |
+          sudo -u builder repo-add "${REPO_NAME}.db.tar.zst" *.pkg.tar.zst
+          for link in "${REPO_NAME}.db" "${REPO_NAME}.files"; do
+            cp -L "$link" "${link}.real"
+            rm "$link"
+            mv "${link}.real" "$link"
+          done
+
+      - name: Publish packages to repo-arch
+        working-directory: ${{ inputs.pkgbuild_dir }}
+        env:
+          GH_TOKEN: ${{ secrets.REPO_ARCH_TOKEN }}
+        run: |
+          gh release upload latest \
+            -R "${REPO_OWNER}/${REPO_NAME}" \
+            --clobber \
+            *.pkg.tar.zst \
+            "${REPO_NAME}.db" "${REPO_NAME}.db.tar.zst" \
+            "${REPO_NAME}.files" "${REPO_NAME}.files.tar.zst"
+
+      - name: Generate release notes
+        run: git-cliff --latest -o RELEASE_NOTES.md
+
+      - name: Create caller tag release (notes only)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes-file RELEASE_NOTES.md
