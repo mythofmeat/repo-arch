@@ -20,15 +20,5 @@ env:
 jobs:
   package:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      PACMAN_KEY: pacman-${{ hashFiles('.github/workflows/package.yml') }}
-      CARGO_REGISTRY_KEY: cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-      CARGO_TARGET_KEY: cargo-target-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
     steps:
-      - run: |
-          echo "pkgbuild_dir: ${{ inputs.pkgbuild_dir }}"
-          echo "extra: ${{ inputs.extra_pacman_packages }}"
-          echo "pacman_key: ${{ env.PACMAN_KEY }}"
-          echo "cargo_target_dir_host: ${{ env.CARGO_TARGET_DIR_HOST }}"
+      - run: echo "${{ env.CARGO_TARGET_DIR_HOST }}"
