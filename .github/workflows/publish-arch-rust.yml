@@ -12,17 +12,10 @@ on:
     secrets:
       REPO_ARCH_TOKEN:
         required: true
-env:
-  REPO_NAME: repo-arch
-  REPO_OWNER: mythofmeat
-  CARGO_TARGET_DIR_HOST: /home/builder/cargo-target
-  CARGO_HOME_HOST: /home/builder/.cargo
 jobs:
   package:
     runs-on: ubuntu-latest
     env:
       PACMAN_KEY: pacman-${{ hashFiles('.github/workflows/package.yml') }}
-      CARGO_REGISTRY_KEY: cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-      CARGO_TARGET_KEY: cargo-target-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
     steps:
-      - run: echo "${{ env.PACMAN_KEY }} ${{ env.CARGO_REGISTRY_KEY }} ${{ env.CARGO_TARGET_KEY }}"
+      - run: echo "${{ env.PACMAN_KEY }}"
