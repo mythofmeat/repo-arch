@@ -16,6 +16,6 @@ jobs:
   package:
     runs-on: ubuntu-latest
     env:
-      PACMAN_KEY: pacman-${{ hashFiles('.github/workflows/package.yml') }}
+      FOO: bar
     steps:
-      - run: echo "${{ env.PACMAN_KEY }}"
+      - run: echo "${{ env.FOO }}"
