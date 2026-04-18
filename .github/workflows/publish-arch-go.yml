@@ -1,6 +1,6 @@
-name: Publish Arch package (Rust)
+name: Publish Arch package (Go)
 
-# Reusable workflow that builds a Rust project's PKGBUILD inside an
+# Reusable workflow that builds a Go project's PKGBUILD inside an
 # archlinux:latest container, merges the resulting packages into
 # mythofmeat/repo-arch's rolling `latest` release, and creates a matching
 # tag release on the caller's own repo with git-cliff release notes.
@@ -8,20 +8,20 @@ name: Publish Arch package (Rust)
 # Caller usage:
 #
 #   jobs:
-#     publish:
+#     arch:
 #       permissions:
 #         contents: write    # REQUIRED — caller must grant at job level
-#       uses: mythofmeat/repo-arch/.github/workflows/publish-arch-rust.yml@main
+#       uses: mythofmeat/repo-arch/.github/workflows/publish-arch-go.yml@main
 #       with:
-#         pkgbuild_dir: contrib
-#         extra_pacman_packages: "alsa-lib protobuf"
+#         pkgbuild_dir: packaging/arch
+#         extra_pacman_packages: "alsa-lib"
 #       secrets: inherit
 
 on:
   workflow_call:
     inputs:
       pkgbuild_dir:
-        description: "Directory containing the PKGBUILD (e.g. 'contrib', 'contrib/arch')"
+        description: "Directory containing the PKGBUILD (e.g. 'packaging/arch', 'contrib')"
         required: true
         type: string
       extra_pacman_packages:
@@ -37,8 +37,6 @@ on:
 env:
   REPO_NAME: repo-arch
   REPO_OWNER: mythofmeat
-  CARGO_TARGET_DIR_HOST: /home/builder/cargo-target
-  CARGO_HOME_HOST: /home/builder/.cargo
 
 jobs:
   package:
@@ -56,9 +54,8 @@ jobs:
       - name: Install system dependencies
         run: |
           pacman -Syu --noconfirm --needed \
-            base-devel clang mold git git-cliff jq nodejs github-cli sudo rustup openssl \
+            base-devel go git git-cliff jq nodejs github-cli sudo \
             ${{ inputs.extra_pacman_packages }}
-          rustup default stable
           useradd -m builder
           echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
 
@@ -66,23 +63,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Restore cargo registry and git db
+      - name: Restore go module + build cache
         uses: actions/cache/restore@v4
         with:
           path: |
-            /home/builder/.cargo/registry
-            /home/builder/.cargo/git
-          key: cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: cargo-registry-
-
-      - name: Restore cargo build target
-        uses: actions/cache/restore@v4
-        with:
-          path: /home/builder/cargo-target
-          key: cargo-target-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
+            /home/builder/go/pkg/mod
+            /home/builder/.cache/go-build
+          key: go-cache-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
           restore-keys: |
-            cargo-target-${{ hashFiles('**/Cargo.lock') }}-
-            cargo-target-
+            go-cache-${{ hashFiles('**/go.sum') }}-
+            go-cache-
 
       - name: Mark workspace as git-safe
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -100,30 +90,22 @@ jobs:
           VER="${TAG#v}"
           sed -i "s|^pkgver=.*|pkgver=${VER}|" PKGBUILD
           sed -i -E "s|^source=\(\"([^:]+)::git\+[^\"]*\"(.*)\)$|source=(\"\1::git+file://${GITHUB_WORKSPACE}#tag=${TAG}\"\2)|" PKGBUILD
-          sed -i "s|export CARGO_TARGET_DIR=target|ln -sfn ${CARGO_TARGET_DIR_HOST} target|" PKGBUILD
           chown -R builder:builder "$GITHUB_WORKSPACE"
-          mkdir -p "${CARGO_TARGET_DIR_HOST}" "${CARGO_HOME_HOST}"
+          mkdir -p /home/builder/go/pkg/mod /home/builder/.cache/go-build
           chown -R builder:builder /home/builder
 
       - name: Build packages
         working-directory: ${{ inputs.pkgbuild_dir }}
         run: sudo -u builder makepkg -sf --noconfirm --nocheck
 
-      - name: Save cargo build target
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: /home/builder/cargo-target
-          key: cargo-target-${{ hashFiles('**/Cargo.lock') }}-${{ github.sha }}
-
-      - name: Save cargo registry and git db
+      - name: Save go module + build cache
         if: always()
         uses: actions/cache/save@v4
         with:
           path: |
-            /home/builder/.cargo/registry
-            /home/builder/.cargo/git
-          key: cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+            /home/builder/go/pkg/mod
+            /home/builder/.cache/go-build
+          key: go-cache-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
 
       - name: Save pacman package cache
         if: always()

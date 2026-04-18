@@ -1,0 +1,216 @@
+name: Publish RPM package (Go)
+
+# Reusable workflow that builds a Go project's RPM(s) inside a fedora:latest
+# container, merges them into mythofmeat/repo-rpm's rolling `latest` release,
+# regenerates dnf repo metadata with createrepo_c, pushes the new metadata to
+# repo-rpm's gh-pages branch (served at https://mythofmeat.github.io/repo-rpm/),
+# and creates a matching tag release on the caller's own repo with git-cliff
+# release notes.
+#
+# Caller usage:
+#
+#   jobs:
+#     rpm:
+#       permissions:
+#         contents: write    # REQUIRED — caller must grant at job level
+#       uses: mythofmeat/repo-arch/.github/workflows/publish-rpm-go.yml@main
+#       with:
+#         spec_dir: packaging/rpm
+#         extra_dnf_packages: "alsa-lib-devel"
+#       secrets: inherit
+#
+# The spec file is auto-discovered as the first `*.spec` under `spec_dir`.
+# Override with `spec_file` if you have multiple specs.
+
+on:
+  workflow_call:
+    inputs:
+      spec_dir:
+        description: "Directory containing the .spec file (e.g. 'packaging/rpm')"
+        required: true
+        type: string
+      spec_file:
+        description: "Spec filename within spec_dir (default: first *.spec found)"
+        required: false
+        type: string
+        default: ""
+      extra_dnf_packages:
+        description: "Space-separated dnf packages to install beyond the base set (typically BuildRequires your spec needs, e.g. 'alsa-lib-devel')"
+        required: false
+        type: string
+        default: ""
+    secrets:
+      REPO_RPM_TOKEN:
+        description: "PAT with Contents: Read+Write on mythofmeat/repo-rpm"
+        required: true
+
+env:
+  REPO_NAME: repo-rpm
+  REPO_OWNER: mythofmeat
+  PAGES_URL: https://mythofmeat.github.io/repo-rpm/
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:latest
+    steps:
+      - name: Install system dependencies
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            rpm-build rpmdevtools createrepo_c \
+            golang git jq nodejs gh rsync tar findutils which \
+            ${{ inputs.extra_dnf_packages }}
+          # git-cliff: prefer Fedora pkg, fall back to prebuilt binary.
+          if ! dnf install -y git-cliff 2>/dev/null; then
+            GIT_CLIFF_VERSION="2.6.1"
+            curl -fsSL "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz" | tar xz -C /tmp/
+            install -m 755 "/tmp/git-cliff-${GIT_CLIFF_VERSION}/git-cliff" /usr/local/bin/git-cliff
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore go module + build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /root/go/pkg/mod
+            /root/.cache/go-build
+          key: go-cache-rpm-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-cache-rpm-${{ hashFiles('**/go.sum') }}-
+            go-cache-rpm-
+
+      - name: Mark workspace as git-safe
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Verify tag is on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor HEAD origin/main || \
+            { echo "::error::Tag is not on main — skipping build"; exit 1; }
+
+      - name: Build RPMs
+        env:
+          SPEC_DIR: ${{ inputs.spec_dir }}
+          SPEC_FILE: ${{ inputs.spec_file }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          VER="${TAG#v}"
+
+          if [ -n "${SPEC_FILE}" ]; then
+            SPEC="${SPEC_DIR}/${SPEC_FILE}"
+          else
+            SPEC="$(ls ${SPEC_DIR}/*.spec | head -1)"
+          fi
+          if [ ! -f "${SPEC}" ]; then
+            echo "::error::spec file not found: ${SPEC}"; exit 1
+          fi
+          echo "Using spec: ${SPEC}"
+
+          NAME="$(awk '/^Name:[[:space:]]+/ {print $2; exit}' "${SPEC}")"
+          if [ -z "${NAME}" ]; then
+            echo "::error::Could not parse Name: from ${SPEC}"; exit 1
+          fi
+          echo "Package name: ${NAME}  version: ${VER}"
+
+          sed -i "s/^Version:.*/Version:        ${VER}/" "${SPEC}"
+
+          # Source0: NAME-VERSION.tar.gz matches the %setup convention.
+          TMPDIR="$(mktemp -d)"
+          mkdir -p "${TMPDIR}/${NAME}-${VER}"
+          rsync -a \
+            --exclude='.git' --exclude='.venv' --exclude='bin/' \
+            --exclude='__pycache__' --exclude='.claude' \
+            ./ "${TMPDIR}/${NAME}-${VER}/"
+          mkdir -p "$HOME/rpmbuild/SOURCES"
+          tar -czf "$HOME/rpmbuild/SOURCES/${NAME}-${VER}.tar.gz" \
+            -C "${TMPDIR}" "${NAME}-${VER}"
+
+          rpmbuild -bb "${SPEC}"
+
+          mkdir -p "$GITHUB_WORKSPACE/rpm-out"
+          find "$HOME/rpmbuild/RPMS" -name "*.rpm" -exec cp {} "$GITHUB_WORKSPACE/rpm-out/" \;
+          echo "Built RPMs:"
+          ls -la "$GITHUB_WORKSPACE/rpm-out/"
+
+      - name: Save go module + build cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /root/go/pkg/mod
+            /root/.cache/go-build
+          key: go-cache-rpm-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
+
+      - name: Assemble full RPM set (existing + new)
+        env:
+          GH_TOKEN: ${{ secrets.REPO_RPM_TOKEN }}
+        run: |
+          mkdir -p rpm-repo
+          # Pull every existing RPM so createrepo_c sees the complete set.
+          (cd rpm-repo && gh release download latest \
+            -R "${REPO_OWNER}/${REPO_NAME}" \
+            -p '*.rpm' \
+            --skip-existing 2>/dev/null) || echo "No existing RPMs; starting fresh."
+          # New RPMs win on filename collision (re-run of the same tag).
+          cp -f rpm-out/*.rpm rpm-repo/
+          echo "Full set:"; ls -la rpm-repo/
+
+      - name: Generate repodata
+        run: |
+          cd rpm-repo
+          createrepo_c \
+            --baseurl "https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/latest/" \
+            .
+          echo "repodata/:"; ls -la repodata/
+
+      - name: Publish new RPMs to repo-rpm release
+        env:
+          GH_TOKEN: ${{ secrets.REPO_RPM_TOKEN }}
+        run: |
+          gh release upload latest \
+            -R "${REPO_OWNER}/${REPO_NAME}" \
+            --clobber \
+            rpm-out/*.rpm
+
+      - name: Push regenerated repodata to gh-pages
+        env:
+          REPO_RPM_TOKEN: ${{ secrets.REPO_RPM_TOKEN }}
+        run: |
+          git clone --branch gh-pages --depth 1 \
+            "https://x-access-token:${REPO_RPM_TOKEN}@github.com/${REPO_OWNER}/${REPO_NAME}.git" \
+            /tmp/gh-pages
+          rm -rf /tmp/gh-pages/repodata
+          cp -r rpm-repo/repodata /tmp/gh-pages/repodata
+          cd /tmp/gh-pages
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add repodata
+          if git diff --cached --quiet; then
+            echo "No repodata changes to push."
+          else
+            git commit -m "Update repodata for ${{ github.ref_name }}"
+            git push
+          fi
+
+      - name: Generate release notes
+        run: git-cliff --latest -o RELEASE_NOTES.md
+
+      - name: Create caller tag release (notes only; idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          gh release create "${TAG}" \
+            --title "${TAG}" \
+            --notes-file RELEASE_NOTES.md 2>/tmp/gh_err || {
+              if grep -qi "already_exists\|already exists" /tmp/gh_err; then
+                echo "Release ${TAG} already created by a sibling job; skipping."
+              else
+                cat /tmp/gh_err; exit 1
+              fi
+            }
