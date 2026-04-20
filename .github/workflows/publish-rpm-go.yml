@@ -72,17 +72,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Restore go module + build cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            /root/go/pkg/mod
-            /root/.cache/go-build
-          key: go-cache-rpm-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
-          restore-keys: |
-            go-cache-rpm-${{ hashFiles('**/go.sum') }}-
-            go-cache-rpm-
-
       - name: Mark workspace as git-safe
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
@@ -136,15 +125,6 @@ jobs:
           find "$HOME/rpmbuild/RPMS" -name "*.rpm" -exec cp {} "$GITHUB_WORKSPACE/rpm-out/" \;
           echo "Built RPMs:"
           ls -la "$GITHUB_WORKSPACE/rpm-out/"
-
-      - name: Save go module + build cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            /root/go/pkg/mod
-            /root/.cache/go-build
-          key: go-cache-rpm-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
 
       - name: Assemble full RPM set (existing + new)
         env:
