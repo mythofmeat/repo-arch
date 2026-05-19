@@ -12,6 +12,9 @@ name: release-plz (Rust)
 #
 #   jobs:
 #     release-plz:
+#       permissions:
+#         contents: write           # REQUIRED — caller must grant at job level
+#         pull-requests: write      # REQUIRED — caller must grant at job level
 #       uses: mythofmeat/repo-arch/.github/workflows/release-plz-rust.yml@main
 #       secrets:
 #         CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -28,10 +31,6 @@ on:
       CARGO_REGISTRY_TOKEN:
         description: "crates.io API token. Required at runtime if any crate in the repo has `publish = true`, but declared optional here so the workflow validates before the secret is configured in a freshly-created repo."
         required: false
-
-permissions:
-  contents: write
-  pull-requests: write
 
 jobs:
   release-plz:
