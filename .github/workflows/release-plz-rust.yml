@@ -1,0 +1,60 @@
+name: release-plz (Rust)
+
+# Reusable workflow that runs release-plz against a Rust repo:
+#   - On push to main, opens/updates a release PR with bumped versions
+#     and generated changelog entries based on conventional commits.
+#   - When that PR merges, tags and publishes the affected crates.
+#
+# The set of crates published (and any release-channel overrides) is
+# configured by the caller's own `release-plz.toml`.
+#
+# Caller usage:
+#
+#   jobs:
+#     release-plz:
+#       uses: mythofmeat/repo-arch/.github/workflows/release-plz-rust.yml@main
+#       secrets:
+#         CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+on:
+  workflow_call:
+    inputs:
+      system_deps:
+        description: "Space-separated apt packages required to compile this crate at release time."
+        required: false
+        type: string
+        default: ""
+    secrets:
+      CARGO_REGISTRY_TOKEN:
+        description: "crates.io API token. Required if any crate in the repo has `release.publish = true`."
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-plz:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            mold build-essential pkg-config ${{ inputs.system_deps }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run release-plz
+        uses: MarcoIeni/release-plz-action@v0.5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

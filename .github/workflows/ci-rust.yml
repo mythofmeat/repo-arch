@@ -1,0 +1,73 @@
+name: Rust CI
+
+# Reusable workflow that runs fmt + clippy + tests for a Rust workspace.
+# Installs mold for faster linking. Optional `system_deps` for repos that
+# need extra apt packages at build time.
+#
+# Caller usage:
+#
+#   jobs:
+#     ci:
+#       uses: mythofmeat/repo-arch/.github/workflows/ci-rust.yml@main
+#       with:
+#         system_deps: "libasound2-dev protobuf-compiler"
+
+on:
+  workflow_call:
+    inputs:
+      system_deps:
+        description: "Space-separated apt packages to install beyond the base set (mold, build-essential, pkg-config)."
+        required: false
+        type: string
+        default: ""
+      test_args:
+        description: "Extra arguments passed to `cargo test`."
+        required: false
+        type: string
+        default: "--workspace"
+      clippy_args:
+        description: "Extra arguments passed to `cargo clippy`."
+        required: false
+        type: string
+        default: "--workspace --all-targets"
+      run_fmt:
+        description: "Run `cargo fmt --all --check`."
+        required: false
+        type: boolean
+        default: true
+      run_clippy:
+        description: "Run `cargo clippy` with `-D warnings`."
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            mold build-essential pkg-config ${{ inputs.system_deps }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        if: inputs.run_fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        if: inputs.run_clippy
+        run: cargo clippy ${{ inputs.clippy_args }} -- -D warnings
+
+      - name: cargo test
+        run: cargo test ${{ inputs.test_args }}
