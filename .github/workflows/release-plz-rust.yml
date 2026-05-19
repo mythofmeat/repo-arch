@@ -26,8 +26,8 @@ on:
         default: ""
     secrets:
       CARGO_REGISTRY_TOKEN:
-        description: "crates.io API token. Required if any crate in the repo has `release.publish = true`."
-        required: true
+        description: "crates.io API token. Required at runtime if any crate in the repo has `publish = true`, but declared optional here so the workflow validates before the secret is configured in a freshly-created repo."
+        required: false
 
 permissions:
   contents: write
