@@ -97,7 +97,14 @@ jobs:
         working-directory: ${{ inputs.pkgbuild_dir }}
         run: |
           TAG="${{ github.ref_name }}"
-          VER="${TAG#v}"
+          # Support both `v<version>` (single-anchor workspaces) and
+          # `<pkgname>-v<version>` (release-plz per-crate tags). makepkg
+          # rejects hyphens in pkgver, so we must extract just the version.
+          case "$TAG" in
+            *-v*) VER="${TAG##*-v}" ;;
+            v*)   VER="${TAG#v}" ;;
+            *)    VER="$TAG" ;;
+          esac
           sed -i "s|^pkgver=.*|pkgver=${VER}|" PKGBUILD
           sed -i -E "s|^source=\(\"([^:]+)::git\+[^\"]*\"(.*)\)$|source=(\"\1::git+file://${GITHUB_WORKSPACE}#tag=${TAG}\"\2)|" PKGBUILD
           sed -i "s|export CARGO_TARGET_DIR=target|ln -sfn ${CARGO_TARGET_DIR_HOST} target|" PKGBUILD
