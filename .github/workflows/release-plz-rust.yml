@@ -32,6 +32,11 @@ on:
         required: false
         type: string
         default: ""
+      command:
+        description: "release-plz subcommand: 'release-pr' (open/update the release PR only), 'release' (tag + publish only), or empty for both (default). Splitting lets callers run release-pr on demand and release on push to main."
+        required: false
+        type: string
+        default: ""
     secrets:
       CARGO_REGISTRY_TOKEN:
         description: "crates.io API token. Required at runtime if any crate in the repo has `publish = true`, but declared optional here so the workflow validates before the secret is configured in a freshly-created repo."
@@ -62,6 +67,8 @@ jobs:
 
       - name: Run release-plz
         uses: MarcoIeni/release-plz-action@v0.5
+        with:
+          command: ${{ inputs.command }}
         env:
           GITHUB_TOKEN: ${{ secrets.REPO_ARCH_TOKEN || secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
