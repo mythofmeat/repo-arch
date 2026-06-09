@@ -150,6 +150,23 @@ jobs:
             -p "${REPO_NAME}.files.tar.zst" \
             2>/dev/null || echo "No existing db; starting fresh."
 
+      - name: Sanitize epoch colons in package filenames
+        # GitHub release assets cannot contain ':' — it is silently rewritten to
+        # '.' on upload, which desyncs the stored asset name from the repo db's
+        # %FILENAME% and makes any epoch package (e.g. shore-daemon 1:0.1.0)
+        # 404 on download. Rename ':' -> '.' before repo-add + upload so the db
+        # and the uploaded asset agree. repo-add still reads the true version
+        # (including the epoch) from each package's internal .PKGINFO, so
+        # %VERSION% is unaffected.
+        working-directory: ${{ inputs.pkgbuild_dir }}
+        run: |
+          for f in *.pkg.tar.zst; do
+            [ -e "$f" ] || continue
+            case "$f" in
+              *:*) sudo -u builder mv -- "$f" "${f//:/.}" ;;
+            esac
+          done
+
       - name: Merge into repo database
         working-directory: ${{ inputs.pkgbuild_dir }}
         run: |
